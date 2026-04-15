@@ -147,8 +147,8 @@
   // ================================================================
 
   const TEAMS = {
-    orm:  ['orm1.jpeg', 'orm2.jpeg'],
-    ling: ['ling1.jpeg', 'ling2.jpeg'],
+    orm:  ['orm1.jpeg', 'orm2.jpeg', 'orm3.jpeg', 'orm4.jpeg', 'orm5.jpeg', 'orm6.jpeg', 'orm7.jpeg'],
+    ling: ['ling1.jpeg', 'ling2.jpeg', 'ling3.jpeg', 'ling4.jpeg', 'ling5.jpeg', 'ling6.jpeg', 'ling7.jpeg', 'ling8.jpeg'],
   };
 
   /** Pick a random element from an array. */
@@ -175,10 +175,23 @@
    * Fine-tune these if a crop looks off for a specific photo.
    */
   const PORTRAIT_CROPS = {
-    'orm1.jpeg':  { cx: 0.44, cy: 0.44, r: 0.42 },  // close-up selfie, slightly left
+    // ── Orm ────────────────────────────────────────────────────
+    'orm1.jpeg':  { cx: 0.44, cy: 0.44, r: 0.42 },  // landscape close-up, face slightly left
     'orm2.jpeg':  { cx: 0.50, cy: 0.55, r: 0.38 },  // hair bun pushes face down
+    'orm3.jpeg':  { cx: 0.50, cy: 0.50, r: 0.46 },  // looking up, face fills frame
+    'orm4.jpeg':  { cx: 0.48, cy: 0.48, r: 0.44 },  // close-up eating, slight left tilt
+    'orm5.jpeg':  { cx: 0.50, cy: 0.50, r: 0.46 },  // in car, face very close
+    'orm6.jpeg':  { cx: 0.50, cy: 0.55, r: 0.42 },  // pink background, hair on top
+    'orm7.jpeg':  { cx: 0.50, cy: 0.50, r: 0.44 },  // dark background, centered
+    // ── Ling ───────────────────────────────────────────────────
     'ling1.jpeg': { cx: 0.50, cy: 0.46, r: 0.44 },  // laughing, fills frame
-    'ling2.jpeg': { full: true },                     // very tall image — show full photo, no crop
+    'ling2.jpeg': { full: true },                     // very tall image (996×2160) — full photo
+    'ling3.jpeg': { cx: 0.48, cy: 0.50, r: 0.45 },  // face fills frame, slight left tilt
+    'ling4.jpeg': { cx: 0.50, cy: 0.54, r: 0.44 },  // baseball cap, face slightly lower
+    'ling5.jpeg': { cx: 0.47, cy: 0.50, r: 0.44 },  // face fills frame, angled slightly left
+    'ling6.jpeg': { cx: 0.47, cy: 0.44, r: 0.42 },  // eating ice cream, face upper portion
+    'ling7.jpeg': { cx: 0.50, cy: 0.52, r: 0.44 },  // pouting, face fills frame
+    'ling8.jpeg': { cx: 0.50, cy: 0.48, r: 0.40 },  // pink face mask, centered
   };
 
   // Loaded HTMLImageElement objects, keyed by filename

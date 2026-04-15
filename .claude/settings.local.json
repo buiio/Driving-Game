@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(python3 -c ' *)",
-      "Bash(sips -g pixelWidth -g pixelHeight '/Users/nicole/Documents/Claude Project/Driving Game/ling2.jpeg' '/Users/nicole/Documents/Claude Project/Driving Game/orm1.jpeg' '/Users/nicole/Documents/Claude Project/Driving Game/orm2.jpeg' '/Users/nicole/Documents/Claude Project/Driving Game/ling1.jpeg')"
+      "Bash(sips -g pixelWidth -g pixelHeight '/Users/nicole/Documents/Claude Project/Driving Game/ling2.jpeg' '/Users/nicole/Documents/Claude Project/Driving Game/orm1.jpeg' '/Users/nicole/Documents/Claude Project/Driving Game/orm2.jpeg' '/Users/nicole/Documents/Claude Project/Driving Game/ling1.jpeg')",
+      "Bash(ls \"/Users/nicole/Documents/Claude Project/Driving Game/\"*.jpeg \"/Users/nicole/Documents/Claude Project/Driving Game/\"*.jpg)"
     ]
   }
 }
