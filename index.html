@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>Roasting Pan Rush</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #1a1a2e;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: 'Segoe UI', Tahoma, sans-serif;
+      color: #fff;
+    }
+
+    h1 {
+      font-size: 1.9rem;
+      letter-spacing: 3px;
+      margin-bottom: 14px;
+      text-shadow: 0 2px 8px rgba(0,0,0,0.5);
+    }
+
+    canvas {
+      /* Scales down on narrow screens while keeping internal resolution */
+      width: min(420px, calc(100vw - 16px));
+      aspect-ratio: 420 / 640;
+      border: 3px solid #444;
+      border-radius: 10px;
+      display: block;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+      touch-action: none;   /* prevent scroll/zoom during swipe */
+    }
+
+    /* On-screen lane buttons — visible on touch devices */
+    #mobileControls {
+      display: flex;
+      gap: 32px;
+      margin-top: 18px;
+    }
+
+    .btn-lane {
+      width: 74px;
+      height: 74px;
+      border-radius: 50%;
+      border: 2px solid #555;
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
+      font-size: 2rem;
+      cursor: pointer;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.1s;
+    }
+
+    .btn-lane:active {
+      background: rgba(255, 255, 255, 0.25);
+    }
+
+    #instructions {
+      margin-top: 10px;
+      font-size: 0.82rem;
+      color: #888;
+      letter-spacing: 1px;
+      text-align: center;
+      padding: 0 8px;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>🍳 Roasting Pan Rush</h1>
+  <canvas id="gameCanvas"></canvas>
+
+  <!-- Touch controls — shown below the canvas on mobile -->
+  <div id="mobileControls">
+    <button class="btn-lane" id="btnLeft"  aria-label="Move left">◀</button>
+    <button class="btn-lane" id="btnRight" aria-label="Move right">▶</button>
+  </div>
+
+  <p id="instructions">Swipe or tap ◀ ▶ to switch lanes &nbsp;·&nbsp; Catch the other face &nbsp;·&nbsp; Avoid the Channel 3 logo</p>
+
+  <script>
+  // ================================================================
+  //  CONFIGURATION
+  //  ▸ All gameplay constants live here so you can tune them easily.
+  // ================================================================
+  const CONFIG = {
+
+    // ── Canvas ──────────────────────────────────────────────────
+    canvasWidth:  420,
+    canvasHeight: 640,
+
+    // ── Road ────────────────────────────────────────────────────
+    roadPadding:   34,       // px of "grass" on each side of the road
+    roadColor:    '#2b2b2b',
+    grassColor:   '#3a5c35',
+    edgeColor:    '#888',
+    laneLineColor:'#505050',
+    dashLength:    28,        // px of each dashed lane-divider segment
+    dashGap:       20,        // px gap between segments
+
+    // ── Player (roasting pan) ────────────────────────────────────
+    playerEmoji:    '🍳',
+    playerSize:      46,      // rendered emoji size in px
+    playerYOffset:   80,      // distance from the bottom of the canvas
+    laneSwapSpeed:  0.16,     // lerp factor per frame — higher = snappier (0–1)
+
+    // ── Falling objects ──────────────────────────────────────────
+    chickenEmoji:   '🍗',
+    charcoalEmoji:  '🪨',
+    objectSize:      40,      // rendered emoji size in px
+
+    //  Speed & difficulty ramp
+    initialFallSpeed:     2.5,    // px per frame at game start
+    fallSpeedIncrement:   0.001,  // px/frame added each frame (slow burn ramp)
+
+    //  Spawn timing
+    initialSpawnInterval: 90,     // frames between spawns at the start
+    minSpawnInterval:     28,     // fastest possible spawn interval
+    spawnIntervalShrink:  0.015,  // interval shrinks by this much each frame
+
+    //  Object mix
+    chickenProbability:   0.55,   // chance a new spawn is a chicken; rest = charcoal
+
+    // ── Collision ────────────────────────────────────────────────
+    hitRadius: 19,   // px — half-width used for circular overlap detection
+
+    // ── Scoring / lives ──────────────────────────────────────────
+    pointsPerChicken: 10,
+    startingLives:     3,
+    lifeEmoji:        '❤️',
+  };
+
+
+  // ================================================================
+  //  IMAGE ASSETS
+  //  ▸ Player is randomly one of the four portraits.
+  //    Falling collectibles are always from the OPPOSING team.
+  //    orm1 / orm2  = "orm team"   |   ling1 / ling2 = "ling team"
+  // ================================================================
+
+  const TEAMS = {
+    orm:  ['orm1.jpeg', 'orm2.jpeg'],
+    ling: ['ling1.jpeg', 'ling2.jpeg'],
+  };
+
+  /** Pick a random element from an array. */
+  function randomFrom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+
+  // Random player from all four portraits
+  const ALL_PORTRAITS = [...TEAMS.orm, ...TEAMS.ling];
+  const PLAYER_SRC    = randomFrom(ALL_PORTRAITS);
+
+  // Opposing team pool — used to pick a face for each falling collectible
+  const PLAYER_TEAM   = TEAMS.orm.includes(PLAYER_SRC) ? 'orm' : 'ling';
+  const OPPOSING_TEAM = PLAYER_TEAM === 'orm' ? TEAMS.ling : TEAMS.orm;
+
+  const ROCK_SRC = 'ch3.png';
+
+  /**
+   * Circular face-crop parameters for each portrait.
+   * cx / cy  — face centre as a fraction of the image's natural width / height.
+   * r        — crop radius as a fraction of the image's smaller dimension.
+   * Fine-tune these if a crop looks off for a specific photo.
+   */
+  const PORTRAIT_CROPS = {
+    'orm1.jpeg':  { cx: 0.44, cy: 0.44, r: 0.42 },  // close-up selfie, slightly left
+    'orm2.jpeg':  { cx: 0.50, cy: 0.55, r: 0.38 },  // hair bun pushes face down
+    'ling1.jpeg': { cx: 0.50, cy: 0.46, r: 0.44 },  // laughing, fills frame
+    'ling2.jpeg': { full: true },                     // very tall image — show full photo, no crop
+  };
+
+  // Loaded HTMLImageElement objects, keyed by filename
+  const images = {};
+
+  /** Load all image assets, then call onDone(). */
+  function loadImages(onDone) {
+    const srcs    = [...ALL_PORTRAITS, ROCK_SRC];
+    let remaining = srcs.length;
+
+    for (const src of srcs) {
+      const img   = new Image();
+      img.onload  = () => { if (--remaining === 0) onDone(); };
+      img.onerror = () => { if (--remaining === 0) onDone(); };  // fail gracefully
+      img.src     = src;
+      images[src] = img;
+    }
+  }
+
+  // ================================================================
+  //  AUDIO
+  // ================================================================
+
+  // Scream sound played once when the game ends
+  const screamAudio = new Audio('orm scream.m4a');
+  screamAudio.preload = 'auto';
+
+  // Correct sound — played when the player catches a falling face
+  const correctAudio = new Audio('yay.mp3');
+  correctAudio.preload = 'auto';
+
+  // Wrong sound — played when the player hits the ch3 obstacle
+  // Only the first 1 second is played, then it stops
+  const wrongAudio = new Audio('buzz.m4a');
+  wrongAudio.preload = 'auto';
+
+  /** Play the scream from the beginning (safe to call multiple times). */
+  function playScream() {
+    screamAudio.currentTime = 0;
+    screamAudio.play().catch(() => {});
+  }
+
+  /** Play the yay sound from the beginning. */
+  function playCorrect() {
+    correctAudio.currentTime = 0;
+    correctAudio.play().catch(() => {});
+  }
+
+  /** Play only the first 1 second of the buzz sound. */
+  function playWrong() {
+    wrongAudio.currentTime = 0;
+    wrongAudio.play().catch(() => {});
+    setTimeout(() => {
+      wrongAudio.pause();
+      wrongAudio.currentTime = 0;
+    }, 1000);
+  }
+
+
+  // ================================================================
+  //  CANVAS SETUP
+  // ================================================================
+  const canvas = document.getElementById('gameCanvas');
+  const ctx    = canvas.getContext('2d');
+  canvas.width  = CONFIG.canvasWidth;
+  canvas.height = CONFIG.canvasHeight;
+
+
+  // ================================================================
+  //  HELPERS
+  // ================================================================
+
+  /** Pixel width of the road surface (excludes grass padding). */
+  function roadWidth() {
+    return CONFIG.canvasWidth - CONFIG.roadPadding * 2;
+  }
+
+  /** Horizontal centre pixel of lane index 0, 1, or 2. */
+  function laneCenter(lane) {
+    const laneW = roadWidth() / 3;
+    return CONFIG.roadPadding + laneW * lane + laneW / 2;
+  }
+
+  /** Y position of the player's centre. */
+  function playerY() {
+    return CONFIG.canvasHeight - CONFIG.playerYOffset;
+  }
+
+  /** Draw an emoji centred at (x, y) at the given pixel size. */
+  function drawEmoji(emoji, x, y, size) {
+    ctx.font         = `${size}px serif`;
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(emoji, x, y);
+  }
+
+  /**
+   * Draw a portrait photo cropped to a circle, centred at (x, y).
+   * The circular crop focuses on the face using the PORTRAIT_CROPS config.
+   * `size` is the rendered diameter in canvas pixels.
+   */
+  function drawPortrait(src, x, y, size) {
+    const img  = images[src];
+    if (!img || !img.complete) return;
+
+    const crop = PORTRAIT_CROPS[src];
+    const half = size / 2;
+
+    ctx.save();
+    // Clip to a circle so the background outside the head is hidden
+    ctx.beginPath();
+    ctx.arc(x, y, half, 0, Math.PI * 2);
+    ctx.clip();
+
+    if (crop.full) {
+      // No face-crop — scale the entire photo into the circle
+      ctx.drawImage(img, x - half, y - half, size, size);
+    } else {
+      // Crop to the face region defined in PORTRAIT_CROPS
+      const iw    = img.naturalWidth;
+      const ih    = img.naturalHeight;
+      const srcR  = Math.min(iw, ih) * crop.r;
+      const srcCX = iw * crop.cx;
+      const srcCY = ih * crop.cy;
+      ctx.drawImage(
+        img,
+        srcCX - srcR, srcCY - srcR, srcR * 2, srcR * 2,  // source rect
+        x - half,     y - half,     size,      size        // dest rect
+      );
+    }
+
+    ctx.restore();
+  }
+
+  /**
+   * Draw ch3.png (or any image) as a simple circle, centred at (x, y).
+   * Since ch3.png is already a circular logo, no special crop is needed.
+   */
+  function drawRoundImage(src, x, y, size) {
+    const img = images[src];
+    if (!img || !img.complete) return;
+
+    const half = size / 2;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(x, y, half, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.drawImage(img, x - half, y - half, size, size);
+    ctx.restore();
+  }
+
+
+  // ================================================================
+  //  GAME STATE
+  //  ▸ initState() resets everything for a fresh game.
+  // ================================================================
+  let state = {};
+
+  function initState() {
+    state = {
+      phase: 'playing',     // 'playing' | 'gameover'
+
+      score:  0,
+      lives:  CONFIG.startingLives,
+      frame:  0,
+
+      // Lane switching
+      currentLane: 1,       // where the player currently is (0=left, 1=centre, 2=right)
+      targetLane:  1,       // where the player is heading
+      playerX:     laneCenter(1),   // smooth interpolated x-position
+
+      // Falling object pool
+      objects: [],          // [ { x, y, type: 'chicken'|'charcoal' }, … ]
+
+      // Difficulty scalars (increase over time)
+      fallSpeed:       CONFIG.initialFallSpeed,
+      spawnInterval:   CONFIG.initialSpawnInterval,
+      framesSinceSpawn: 0,
+
+      // Road animation
+      dashOffset: 0,        // drives scrolling lane-divider dashes
+    };
+  }
+
+
+  // ================================================================
+  //  INPUT
+  // ================================================================
+  const keysDown = {};
+
+  document.addEventListener('keydown', e => {
+    if (keysDown[e.code]) return;   // ignore OS key-repeat
+    keysDown[e.code] = true;
+
+    if (state.phase === 'playing') {
+      if (e.code === 'ArrowLeft'  && state.targetLane > 0) state.targetLane--;
+      if (e.code === 'ArrowRight' && state.targetLane < 2) state.targetLane++;
+    } else if (state.phase === 'gameover') {
+      if (e.code === 'Space' || e.code === 'Enter') initState();
+    }
+  });
+
+  document.addEventListener('keyup', e => { keysDown[e.code] = false; });
+
+  // ── Touch: swipe left/right on the canvas ────────────────────
+  // SWIPE_THRESHOLD — minimum horizontal px movement counted as a swipe
+  const SWIPE_THRESHOLD = 30;
+  let touchStartX = 0;
+
+  canvas.addEventListener('touchstart', e => {
+    touchStartX = e.changedTouches[0].clientX;
+    e.preventDefault();   // stop the page from scrolling
+  }, { passive: false });
+
+  canvas.addEventListener('touchend', e => {
+    const dx = e.changedTouches[0].clientX - touchStartX;
+
+    if (state.phase === 'playing') {
+      if (dx < -SWIPE_THRESHOLD && state.targetLane > 0) state.targetLane--;
+      if (dx >  SWIPE_THRESHOLD && state.targetLane < 2) state.targetLane++;
+    } else if (state.phase === 'gameover') {
+      initState();    // tap anywhere on canvas to restart
+    }
+    e.preventDefault();
+  }, { passive: false });
+
+  // ── On-screen buttons ─────────────────────────────────────────
+  // Helper: fire a lane action on both mousedown and touchstart
+  // so the buttons work on desktop too.
+  function bindLaneButton(id, action) {
+    const btn = document.getElementById(id);
+    const fire = e => {
+      e.preventDefault();
+      if (state.phase === 'playing') action();
+      else if (state.phase === 'gameover') initState();
+    };
+    btn.addEventListener('touchstart', fire, { passive: false });
+    btn.addEventListener('mousedown',  fire);
+  }
+
+  bindLaneButton('btnLeft',  () => { if (state.targetLane > 0) state.targetLane--; });
+  bindLaneButton('btnRight', () => { if (state.targetLane < 2) state.targetLane++; });
+
+
+  // ================================================================
+  //  SPAWNING
+  // ================================================================
+
+  /** Create a new collectible or obstacle in a random lane at the top. */
+  function spawnObject() {
+    const lane = Math.floor(Math.random() * 3);
+    const type = Math.random() < CONFIG.chickenProbability ? 'chicken' : 'charcoal';
+    state.objects.push({
+      x:    laneCenter(lane),
+      y:   -CONFIG.objectSize,        // start just above the visible canvas
+      type,
+      // Each collectible independently picks a random face from the opposing team
+      src:  type === 'chicken' ? randomFrom(OPPOSING_TEAM) : ROCK_SRC,
+    });
+  }
+
+
+  // ================================================================
+  //  COLLISION DETECTION
+  // ================================================================
+
+  /**
+   * Check every object against the player using simple circle overlap.
+   * Matching objects are removed from the pool; score/lives are updated.
+   */
+  function checkCollisions() {
+    const px = state.playerX;
+    const py = playerY();
+    const r  = CONFIG.hitRadius;
+
+    state.objects = state.objects.filter(obj => {
+      // Remove objects that have scrolled off the bottom of the screen
+      if (obj.y > CONFIG.canvasHeight + CONFIG.objectSize) return false;
+
+      // Circle–circle distance check
+      const dx   = obj.x - px;
+      const dy   = obj.y - py;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist < r * 2) {
+        if (obj.type === 'chicken') {
+          state.score += CONFIG.pointsPerChicken;
+          playCorrect();                  // 🎉 caught a face
+        } else {
+          // 💥 hit ch3 logo — only buzz if there are still lives left after this hit
+          state.lives--;
+          if (state.lives <= 0) {
+            state.phase = 'gameover';
+            playScream();               // final hit: scream only, no buzz overlap
+          } else {
+            playWrong();                // still alive: buzz plays normally
+          }
+        }
+        return false;   // remove collided object
+      }
+
+      return true;      // keep object
+    });
+  }
+
+
+  // ================================================================
+  //  UPDATE  (called every animation frame)
+  // ================================================================
+  function update() {
+    if (state.phase !== 'playing') return;
+
+    state.frame++;
+
+    // ── Ramp up difficulty ──
+    state.fallSpeed    += CONFIG.fallSpeedIncrement;
+    state.spawnInterval = Math.max(
+      CONFIG.minSpawnInterval,
+      state.spawnInterval - CONFIG.spawnIntervalShrink
+    );
+
+    // ── Scroll lane-divider dashes downward ──
+    state.dashOffset = (state.dashOffset + state.fallSpeed) % (CONFIG.dashLength + CONFIG.dashGap);
+
+    // ── Smoothly interpolate player toward the target lane ──
+    const targetX  = laneCenter(state.targetLane);
+    state.playerX += (targetX - state.playerX) * CONFIG.laneSwapSpeed;
+
+    // ── Move all falling objects down ──
+    for (const obj of state.objects) {
+      obj.y += state.fallSpeed;
+    }
+
+    // ── Spawn new objects on schedule ──
+    state.framesSinceSpawn++;
+    if (state.framesSinceSpawn >= state.spawnInterval) {
+      spawnObject();
+      state.framesSinceSpawn = 0;
+    }
+
+    // ── Resolve catches and collisions ──
+    checkCollisions();
+  }
+
+
+  // ================================================================
+  //  DRAW
+  // ================================================================
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    drawRoad();
+    drawObjects();
+    drawPlayer();
+    drawHUD();
+
+    if (state.phase === 'gameover') drawGameOver();
+  }
+
+  // ── Road surface, grass, edges, lane dividers ──
+  function drawRoad() {
+    // Grass on both sides
+    ctx.fillStyle = CONFIG.grassColor;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Tarmac
+    ctx.fillStyle = CONFIG.roadColor;
+    ctx.fillRect(CONFIG.roadPadding, 0, roadWidth(), canvas.height);
+
+    // Scrolling dashed lane dividers
+    const laneW = roadWidth() / 3;
+    ctx.strokeStyle    = CONFIG.laneLineColor;
+    ctx.lineWidth      = 2;
+    ctx.setLineDash([CONFIG.dashLength, CONFIG.dashGap]);
+    ctx.lineDashOffset = -state.dashOffset;   // negative scrolls dashes downward
+
+    for (let i = 1; i < 3; i++) {
+      const x = CONFIG.roadPadding + laneW * i;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x, canvas.height);
+      ctx.stroke();
+    }
+
+    // Reset dash state
+    ctx.setLineDash([]);
+    ctx.lineDashOffset = 0;
+
+    // Solid road edges
+    ctx.strokeStyle = CONFIG.edgeColor;
+    ctx.lineWidth   = 3;
+    ctx.beginPath();
+    ctx.moveTo(CONFIG.roadPadding, 0);
+    ctx.lineTo(CONFIG.roadPadding, canvas.height);
+    ctx.moveTo(CONFIG.roadPadding + roadWidth(), 0);
+    ctx.lineTo(CONFIG.roadPadding + roadWidth(), canvas.height);
+    ctx.stroke();
+  }
+
+  // ── All falling collectibles and obstacles ──
+  function drawObjects() {
+    for (const obj of state.objects) {
+      if (obj.type === 'chicken') {
+        // Falling face — randomly orm1/orm2 or ling1/ling2 (opposing team), set at spawn
+        drawPortrait(obj.src, obj.x, obj.y, CONFIG.objectSize);
+      } else {
+        // Obstacle — Channel 3 logo
+        drawRoundImage(ROCK_SRC, obj.x, obj.y, CONFIG.objectSize);
+      }
+    }
+  }
+
+  // ── The player's head (roasting pan replacement) ──
+  function drawPlayer() {
+    drawPortrait(PLAYER_SRC, state.playerX, playerY(), CONFIG.playerSize);
+  }
+
+  // ── Score and lives display ──
+  function drawHUD() {
+    // Score (top-left)
+    ctx.fillStyle    = '#ffffff';
+    ctx.font         = 'bold 20px "Segoe UI", Tahoma, sans-serif';
+    ctx.textAlign    = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(`Score: ${state.score}`, 10, 10);
+
+    // Speed indicator (top-centre, subtle)
+    const level = Math.floor((state.fallSpeed - CONFIG.initialFallSpeed) / 0.5) + 1;
+    ctx.fillStyle    = '#aaa';
+    ctx.font         = '14px "Segoe UI", sans-serif';
+    ctx.textAlign    = 'center';
+    ctx.fillText(`Level ${level}`, canvas.width / 2, 12);
+
+    // Lives as hearts (top-right)
+    for (let i = 0; i < state.lives; i++) {
+      drawEmoji(CONFIG.lifeEmoji, canvas.width - 14 - i * 28, 18, 22);
+    }
+  }
+
+  // ── Full-screen game-over overlay ──
+  function drawGameOver() {
+    // Translucent dim
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.68)';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const cx = canvas.width  / 2;
+    const cy = canvas.height / 2;
+
+    // "GAME OVER" heading
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle    = '#ff4444';
+    ctx.font         = 'bold 50px "Segoe UI", Tahoma, sans-serif';
+    ctx.fillText('GAME OVER', cx, cy - 55);
+
+    // Final score
+    ctx.fillStyle = '#ffffff';
+    ctx.font      = '28px "Segoe UI", Tahoma, sans-serif';
+    ctx.fillText(`Score: ${state.score}`, cx, cy + 5);
+
+    // Restart prompt
+    ctx.fillStyle = '#aaaaaa';
+    ctx.font      = '17px "Segoe UI", Tahoma, sans-serif';
+    ctx.fillText('Tap, swipe, Space, or Enter to restart', cx, cy + 52);
+  }
+
+
+  // ================================================================
+  //  MAIN LOOP
+  // ================================================================
+  function gameLoop() {
+    update();
+    draw();
+    requestAnimationFrame(gameLoop);
+  }
+
+  // ── Show a loading screen while images fetch ──
+  function drawLoading() {
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle    = '#fff';
+    ctx.font         = '22px "Segoe UI", sans-serif';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Loading…', canvas.width / 2, canvas.height / 2);
+  }
+
+  // ── Kick everything off once images are ready ──
+  drawLoading();
+  loadImages(() => {
+    initState();
+    gameLoop();
+  });
+
+  </script>
+</body>
+</html>
