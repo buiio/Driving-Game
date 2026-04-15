@@ -197,15 +197,69 @@
   // Loaded HTMLImageElement objects, keyed by filename
   const images = {};
 
-  /** Load all image assets, then call onDone(). */
+  // Pre-rendered offscreen canvases keyed by filename.
+  // Built once at load time using stepped downscaling for maximum sharpness.
+  const portraitCache = {};
+
+  /**
+   * Stepped downscale: halve the image repeatedly until near the target size,
+   * then do one final draw. Each 2:1 step preserves far more detail than a
+   * single giant-to-tiny jump. Returns an offscreen HTMLCanvasElement.
+   */
+  function buildCache(src) {
+    const img  = images[src];
+    const crop = PORTRAIT_CROPS[src];
+    const iw   = img.naturalWidth;
+    const ih   = img.naturalHeight;
+
+    // Determine source region to extract
+    let sx, sy, sw, sh;
+    if (crop.full) {
+      sx = 0; sy = 0; sw = iw; sh = ih;
+    } else {
+      const srcR = Math.min(iw, ih) * crop.r;
+      sx = iw * crop.cx - srcR;
+      sy = ih * crop.cy - srcR;
+      sw = srcR * 2;
+      sh = srcR * 2;
+    }
+
+    // Start: draw the source crop onto a square canvas at full crop size
+    let cur = document.createElement('canvas');
+    cur.width = cur.height = Math.round(Math.max(sw, sh));
+    let cctx = cur.getContext('2d');
+    cctx.imageSmoothingEnabled = true;
+    cctx.imageSmoothingQuality = 'high';
+    cctx.drawImage(img, sx, sy, sw, sh, 0, 0, cur.width, cur.height);
+
+    // Halve repeatedly until we reach ~2× the largest display size
+    const TARGET = CONFIG.playerSize * 4;  // 184px — sharp source for 46px display
+    while (cur.width / 2 >= TARGET) {
+      const half = Math.round(cur.width / 2);
+      const tmp  = document.createElement('canvas');
+      tmp.width  = tmp.height = half;
+      const tctx = tmp.getContext('2d');
+      tctx.imageSmoothingEnabled = true;
+      tctx.imageSmoothingQuality = 'high';
+      tctx.drawImage(cur, 0, 0, half, half);
+      cur = tmp;
+    }
+
+    portraitCache[src] = cur;
+  }
+
+  /** Load all image assets, pre-render caches, then call onDone(). */
   function loadImages(onDone) {
     const srcs    = [...ALL_PORTRAITS, ROCK_SRC];
     let remaining = srcs.length;
 
     for (const src of srcs) {
       const img   = new Image();
-      img.onload  = () => { if (--remaining === 0) onDone(); };
-      img.onerror = () => { if (--remaining === 0) onDone(); };  // fail gracefully
+      img.onload  = () => {
+        if (src !== ROCK_SRC) buildCache(src);   // pre-render portraits only
+        if (--remaining === 0) onDone();
+      };
+      img.onerror = () => { if (--remaining === 0) onDone(); };
       img.src     = src;
       images[src] = img;
     }
@@ -289,40 +343,22 @@
   }
 
   /**
-   * Draw a portrait photo cropped to a circle, centred at (x, y).
-   * The circular crop focuses on the face using the PORTRAIT_CROPS config.
-   * `size` is the rendered diameter in canvas pixels.
+   * Draw a portrait from the pre-rendered cache, clipped to a circle.
+   * Using the cache means the game loop only blits a small, already-sharp
+   * image rather than downscaling a huge photo on every frame.
    */
   function drawPortrait(src, x, y, size) {
-    const img  = images[src];
-    if (!img || !img.complete) return;
+    const cached = portraitCache[src];
+    if (!cached) return;
 
-    const crop = PORTRAIT_CROPS[src];
     const half = size / 2;
-
     ctx.save();
-    // Clip to a circle so the background outside the head is hidden
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     ctx.beginPath();
     ctx.arc(x, y, half, 0, Math.PI * 2);
     ctx.clip();
-
-    if (crop.full) {
-      // No face-crop — scale the entire photo into the circle
-      ctx.drawImage(img, x - half, y - half, size, size);
-    } else {
-      // Crop to the face region defined in PORTRAIT_CROPS
-      const iw    = img.naturalWidth;
-      const ih    = img.naturalHeight;
-      const srcR  = Math.min(iw, ih) * crop.r;
-      const srcCX = iw * crop.cx;
-      const srcCY = ih * crop.cy;
-      ctx.drawImage(
-        img,
-        srcCX - srcR, srcCY - srcR, srcR * 2, srcR * 2,  // source rect
-        x - half,     y - half,     size,      size        // dest rect
-      );
-    }
-
+    ctx.drawImage(cached, x - half, y - half, size, size);
     ctx.restore();
   }
 
@@ -336,10 +372,12 @@
 
     const half = size / 2;
     ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     ctx.beginPath();
     ctx.arc(x, y, half, 0, Math.PI * 2);
     ctx.clip();
-    ctx.drawImage(img, x - half, y - half, size, size);
+    ctx.drawImage(images[src], x - half, y - half, size, size);
     ctx.restore();
   }
 
