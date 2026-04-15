@@ -76,7 +76,6 @@
 </head>
 <body>
 
-  <h1>🍳 Roasting Pan Rush</h1>
   <canvas id="gameCanvas"></canvas>
 
   <!-- Touch controls — shown below the canvas on mobile -->
@@ -85,7 +84,7 @@
     <button class="btn-lane" id="btnRight" aria-label="Move right">▶</button>
   </div>
 
-  <p id="instructions">Swipe or tap ◀ ▶ to switch lanes &nbsp;·&nbsp; Catch the other face &nbsp;·&nbsp; Avoid the Channel 3 logo</p>
+  <p id="instructions">Swipe or tap ◀ ▶ to switch lanes &nbsp;·&nbsp; Catch <span id="catchLabel"></span></p>
 
   <script>
   // ================================================================
@@ -164,6 +163,10 @@
   const OPPOSING_TEAM = PLAYER_TEAM === 'orm' ? TEAMS.ling : TEAMS.orm;
 
   const ROCK_SRC = 'ch3.png';
+
+  // Fill in the instruction label now that we know the opposing team
+  const opposingName = PLAYER_TEAM === 'orm' ? 'Ling' : 'Orm';
+  document.getElementById('catchLabel').textContent = opposingName;
 
   /**
    * Circular face-crop parameters for each portrait.
